@@ -56,8 +56,17 @@ import {
   type Weekday,
 } from '../types/operator';
 import { PROP_PART_LABEL, ROLE_TYPE_COLOR, ROLE_TYPE_LABEL } from '../types/role';
-import { ROW_REVISION, listAllRoles, putOperator, type OperatorRow, type RoleRow } from '../utils/db';
+import {
+  ROW_REVISION,
+  listAllRoles,
+  listAllScenes,
+  putOperator,
+  type OperatorRow,
+  type RoleRow,
+  type SceneRow,
+} from '../utils/db';
 import { exportOperatorCsvFile } from '../utils/export';
+import { rehearsalBreakdownMap } from '../utils/rehearsal';
 import { nowIso } from '../utils/uuid';
 import { minutesToReadable } from '../utils/timecode';
 
@@ -88,9 +97,10 @@ export default function OperatorList() {
   const syncAssignments = useOperatorStore((state) => state.syncAssignments);
   const pairwiseConflicts = useOperatorStore((state) => state.pairwiseConflicts);
   const selfConflicts = useOperatorStore((state) => state.selfConflicts);
-  const updateRehearsalHours = useOperatorStore((state) => state.updateRehearsalHours);
+  const updateExtraRehearsalHours = useOperatorStore((state) => state.updateExtraRehearsalHours);
 
   const [roles, setRoles] = useState<RoleRow[]>([]);
+  const [scenes, setScenes] = useState<SceneRow[]>([]);
   const [operatorModalOpen, setOperatorModalOpen] = useState(false);
   const [slotTarget, setSlotTarget] = useState<OperatorRow | null>(null);
   const [leftOperatorId, setLeftOperatorId] = useState<string | null>(null);
@@ -99,8 +109,9 @@ export default function OperatorList() {
 
   const reload = useCallback(async () => {
     await loadOperators();
-    const roleRows = await listAllRoles();
+    const [roleRows, sceneRows] = await Promise.all([listAllRoles(), listAllScenes()]);
     setRoles(roleRows);
+    setScenes(sceneRows);
     await syncAssignments(roleRows);
   }, [loadOperators, syncAssignments]);
 
@@ -140,6 +151,15 @@ export default function OperatorList() {
     [roles],
   );
 
+  /** 场次折算＋额外排练＋合计：随场次时长与指派关系派生，重载即重算 */
+  const breakdownMap = useMemo(() => rehearsalBreakdownMap(operators, roles, scenes), [operators, roles, scenes]);
+
+  const hoursOf = useCallback(
+    (operatorId: string) =>
+      breakdownMap.get(operatorId) ?? { sceneHours: 0, sceneCount: 0, extraHours: 0, totalHours: 0 },
+    [breakdownMap],
+  );
+
   /** 操耍人档里的指派选择器：按当前操耍人已派角色评估冲突（用于「换绑」演示） */
   const pickerOptionsFor = useCallback(
     (operator: OperatorRow): AssigneeOption[] =>
@@ -161,14 +181,15 @@ export default function OperatorList() {
                 : '',
         },
         assignedCount: candidate.assignedRoleIds.length,
+        totalHours: hoursOf(candidate.id).totalHours,
       })),
-    [operators, selfConflicts],
+    [operators, selfConflicts, hoursOf],
   );
 
-  const totalHours = operators.reduce((acc, operator) => acc + operator.rehearsalHours, 0);
+  const totalHours = operators.reduce((acc, operator) => acc + hoursOf(operator.id).totalHours, 0);
   const conflictPeople = operators.filter((operator) => selfConflicts(operator.id).length > 0).length;
   const unassignedRoles = roles.filter((role) => role.operatorId === null).length;
-  const maxHours = Math.max(1, ...operators.map((operator) => operator.rehearsalHours));
+  const maxHours = Math.max(1, ...operators.map((operator) => hoursOf(operator.id).totalHours));
 
   const pairConflicts = useMemo(() => {
     if (!leftOperatorId || !rightOperatorId || leftOperatorId === rightOperatorId) return [];
@@ -263,7 +284,9 @@ export default function OperatorList() {
     },
   ];
 
-  /** 已派角色表：固定列宽 + 弹性「出场提示」列，保证表头与正文都不再逐字换行 */
+  /** 已派角色表：固定列宽 + 弹性「出场提示」列，保证表头与正文都不再逐字换行；
+   *  「场次时长」列用于逐场对账，合计即场次折算那笔 */
+  const sceneOf = (sceneId: string): SceneRow | undefined => scenes.find((scene) => scene.id === sceneId);
   const roleColumns: ColumnsType<RoleRow> = [
     { title: '影人角色', dataIndex: 'name', width: 124 },
     {
@@ -278,6 +301,21 @@ export default function OperatorList() {
       width: 118,
       render: (value: RoleRow['propParts']) =>
         value.length > 0 ? value.map((part) => PROP_PART_LABEL[part]).join('／') : '无需拆件',
+    },
+    {
+      title: '场次时长',
+      dataIndex: 'sceneId',
+      width: 96,
+      render: (value: string) => {
+        const scene = sceneOf(value);
+        return scene ? (
+          <Tooltip title={`第 ${scene.seq} 场 · ${scene.title}`}>
+            <span>{minutesToReadable(scene.durationMin)}</span>
+          </Tooltip>
+        ) : (
+          '场次已删'
+        );
+      },
     },
     { title: '出场提示', dataIndex: 'entranceCue', ellipsis: true },
     {
@@ -301,7 +339,7 @@ export default function OperatorList() {
               操耍人档
             </Typography.Title>
             <Typography.Text type="secondary">
-              登记签子操耍人、维护冲突时段，并核对每人已派角色与累计排练时长
+              登记签子操耍人、维护冲突时段，并核对每人已派角色与排练时长（场次折算＋额外排练，分两笔再合计）
             </Typography.Text>
           </div>
           <Space wrap>
@@ -318,7 +356,7 @@ export default function OperatorList() {
             <Button
               icon={<DownloadOutlined />}
               onClick={() => {
-                const filename = exportOperatorCsvFile(operators, roles);
+                const filename = exportOperatorCsvFile(operators, roles, scenes);
                 message.success(`已导出操耍人档：${filename}`);
               }}
             >
@@ -335,7 +373,7 @@ export default function OperatorList() {
             <Statistic title="操耍人" value={operators.length} prefix={<TeamOutlined />} suffix="人" />
           </Col>
           <Col xs={12} md={6}>
-            <Statistic title="累计排练" value={totalHours} suffix="小时" />
+            <Statistic title="累计排练（场次＋额外）" value={totalHours} suffix="小时" />
           </Col>
           <Col xs={12} md={6}>
             <Statistic title="时段冲突人数" value={conflictPeople} prefix={<AlertOutlined />} suffix="人" />
@@ -391,6 +429,7 @@ export default function OperatorList() {
               {sortedOperators.map((operator) => {
                 const boundRoles = rolesOf(operator);
                 const selfPairs = selfConflicts(operator.id);
+                const hours = hoursOf(operator.id);
                 return (
                   <Card
                     key={operator.id}
@@ -433,15 +472,19 @@ export default function OperatorList() {
                         >
                           登记时段
                         </Button>
-                        <Button size="small" icon={<PlusOutlined />} onClick={() => void updateRehearsalHours(operator.id, 1)}>
-                          记 +1 小时
+                        <Button
+                          size="small"
+                          icon={<PlusOutlined />}
+                          onClick={() => void updateExtraRehearsalHours(operator.id, 1)}
+                        >
+                          额外 +1 小时
                         </Button>
                         <Button
                           size="small"
                           icon={<MinusCircleOutlined />}
-                          onClick={() => void updateRehearsalHours(operator.id, -1)}
+                          onClick={() => void updateExtraRehearsalHours(operator.id, -1)}
                         >
-                          记 -1 小时
+                          额外 -1 小时
                         </Button>
                         <Button size="small" danger onClick={() => handleDeleteOperator(operator)}>
                           删除
@@ -453,13 +496,13 @@ export default function OperatorList() {
                       <Col xs={24} md={8}>
                         <Space direction="vertical" align="center" style={{ width: '100%' }}>
                           <ProgressRing
-                            percent={Math.round((operator.rehearsalHours / maxHours) * 100)}
-                            title={`${operator.rehearsalHours} 小时`}
-                            center={operator.rehearsalHours}
-                            tooltip={`排练投入相对全档最高（${maxHours} 小时）的占比；数值为累计小时`}
+                            percent={Math.round((hours.totalHours / maxHours) * 100)}
+                            title={`合计 ${hours.totalHours} 小时`}
+                            center={hours.totalHours}
+                            tooltip={`场次折算 ${hours.sceneHours} 小时＋额外排练 ${hours.extraHours} 小时；占比相对全档最高合计（${maxHours} 小时）`}
                           />
                           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                            累计排练投入
+                            场次折算 {hours.sceneHours} 小时（{hours.sceneCount} 场）＋ 额外排练 {hours.extraHours} 小时
                           </Typography.Text>
                         </Space>
                       </Col>
@@ -646,7 +689,8 @@ export default function OperatorList() {
                         影人角色共 {roles.length} 个，待指派 {unassignedRoles} 个。
                       </Typography.Text>
                       <Typography.Text style={{ fontSize: 12 }}>
-                        环形指示按全档最高排练小时折算，色块越满表示排练投入越高。
+                        场次折算按已派角色所在场次时长逐场累加折成小时（同一场次多个角色只计一次），随派活自动重算；
+                        手工登记的另记为额外排练，两笔分开、环形指示按合计折算。
                       </Typography.Text>
                     </Space>
                   }

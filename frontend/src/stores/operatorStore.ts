@@ -45,7 +45,8 @@ interface OperatorStoreState {
   selfConflicts: (operatorId: string) => Array<[SlotRange, SlotRange]>;
   /** 两个操耍人之间的共同重叠时段 */
   pairwiseConflicts: (aId: string, bId: string) => Array<[SlotRange, SlotRange]>;
-  updateRehearsalHours: (operatorId: string, delta: number) => Promise<void>;
+  /** 手工登记额外排练（可正可负）；只动额外那笔，不影响场次折算 */
+  updateExtraRehearsalHours: (operatorId: string, delta: number) => Promise<void>;
 }
 
 function toRange(operator: OperatorRow, slot: BusySlot): SlotRange {
@@ -81,7 +82,7 @@ export const useOperatorStore = create<OperatorStoreState>((set, get) => ({
       skillTags: [...draft.skillTags],
       busySlots: [],
       assignedRoleIds: [],
-      rehearsalHours: 0,
+      extraRehearsalHours: 0,
       createdAt: stamp,
       updatedAt: stamp,
       revision: ROW_REVISION,
@@ -190,11 +191,11 @@ export const useOperatorStore = create<OperatorStoreState>((set, get) => ({
     return pairs;
   },
 
-  async updateRehearsalHours(operatorId, delta) {
+  async updateExtraRehearsalHours(operatorId, delta) {
     const existing = get().operators.find((item) => item.id === operatorId);
     if (!existing) return;
-    const hours = Math.max(0, Math.round((existing.rehearsalHours + delta) * 10) / 10);
-    await putOperator({ ...existing, rehearsalHours: hours, updatedAt: nowIso(), revision: ROW_REVISION });
+    const hours = Math.max(0, Math.round((existing.extraRehearsalHours + delta) * 10) / 10);
+    await putOperator({ ...existing, extraRehearsalHours: hours, updatedAt: nowIso(), revision: ROW_REVISION });
     await get().loadOperators();
   },
 }));

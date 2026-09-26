@@ -14,7 +14,7 @@ import { nowIso } from './uuid';
 import { seedDatabase } from './seed';
 
 /** 当前数据结构版本号（每次调整字段结构必须 +1 并补迁移） */
-export const DB_SCHEMA_VERSION = 2;
+export const DB_SCHEMA_VERSION = 3;
 
 /** 数据库名 */
 export const DB_NAME = 'gbshadowplay';
@@ -31,7 +31,7 @@ export type RoleRow = ShadowRole & Revisioned;
 export type OperatorRow = Operator & Revisioned;
 export type CueRow = PercussionCue & Revisioned;
 
-export const ROW_REVISION = 2;
+export const ROW_REVISION = 3;
 
 class ShadowPlayDatabase extends Dexie {
   plays!: Table<PlayRow, string>;
@@ -53,7 +53,7 @@ class ShadowPlayDatabase extends Dexie {
     });
 
     // v2：新增 revision 行修订号；场次补充索引，锣鼓点补充 playId 冗余便于按剧目统计
-    this.version(DB_SCHEMA_VERSION)
+    this.version(2)
       .stores({
         plays: 'id, title, genre, status, createdAt, updatedAt',
         scenes: 'id, playId, seq, progress, needsShadowScreen',
@@ -77,6 +77,30 @@ class ShadowPlayDatabase extends Dexie {
             if (typeof row.createdAt !== 'string') row.createdAt = row.updatedAt;
           });
         }
+      });
+
+    // v3：操耍人排练时长拆账——原 rehearsalHours（手工累计）认领为 extraRehearsalHours（额外排练），
+    // 场次折算时长改为按已派角色所在场次时长派生计算，不再落库
+    this.version(DB_SCHEMA_VERSION)
+      .stores({
+        plays: 'id, title, genre, status, createdAt, updatedAt',
+        scenes: 'id, playId, seq, progress, needsShadowScreen',
+        roles: 'id, sceneId, operatorId, roleType, name',
+        operators: 'id, name, extraRehearsalHours',
+        cues: 'id, sceneId, atSecond, instrument, beatName',
+      })
+      .upgrade(async (tx) => {
+        await tx
+          .table('operators')
+          .toCollection()
+          .modify((row: Record<string, unknown>) => {
+            // 以前手工登记的累计时长按「额外排练」认领，原字段移除
+            if (typeof row.extraRehearsalHours !== 'number') {
+              row.extraRehearsalHours = typeof row.rehearsalHours === 'number' ? row.rehearsalHours : 0;
+            }
+            delete row.rehearsalHours;
+            row.revision = ROW_REVISION;
+          });
       });
   }
 }
@@ -124,6 +148,11 @@ export async function removePlay(id: string): Promise<void> {
 export async function listScenesByPlay(playId: string): Promise<SceneRow[]> {
   const rows = await db.scenes.where('playId').equals(playId).toArray();
   return rows.sort((a, b) => a.seq - b.seq);
+}
+
+/** 全量场次（操耍人档折算排练时长等跨剧目统计用） */
+export async function listAllScenes(): Promise<SceneRow[]> {
+  return db.scenes.toArray();
 }
 
 export async function getScene(id: string): Promise<SceneRow | undefined> {
@@ -253,6 +282,22 @@ export async function exportSnapshot(): Promise<DatabaseSnapshot> {
   };
 }
 
+/** 旧版存档里的操耍人行：rehearsalHours 尚未拆分为额外排练 */
+type LegacyOperatorSnapshot = Omit<Operator, 'extraRehearsalHours'> & {
+  rehearsalHours?: number;
+  extraRehearsalHours?: number;
+};
+
+/** 认领旧存档里的手工累计时长：没有 extraRehearsalHours 时按 rehearsalHours 入账 */
+function claimLegacyOperatorHours(row: LegacyOperatorSnapshot): Operator {
+  const { rehearsalHours, ...rest } = row;
+  return {
+    ...rest,
+    extraRehearsalHours:
+      typeof row.extraRehearsalHours === 'number' ? row.extraRehearsalHours : (rehearsalHours ?? 0),
+  };
+}
+
 /** 用快照覆盖整库（导入存档） */
 export async function importSnapshot(snapshot: DatabaseSnapshot): Promise<void> {
   await db.transaction('rw', db.plays, db.scenes, db.roles, db.operators, db.cues, async () => {
@@ -267,7 +312,7 @@ export async function importSnapshot(snapshot: DatabaseSnapshot): Promise<void> 
     await db.plays.bulkPut(snapshot.plays.map(rev));
     await db.scenes.bulkPut(snapshot.scenes.map(rev));
     await db.roles.bulkPut(snapshot.roles.map(rev));
-    await db.operators.bulkPut(snapshot.operators.map(rev));
+    await db.operators.bulkPut(snapshot.operators.map((row) => rev(claimLegacyOperatorHours(row))));
     await db.cues.bulkPut(snapshot.cues.map(rev));
   });
 }

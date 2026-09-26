@@ -14,6 +14,8 @@ export interface AssigneeOption {
   assessment: CandidateAssessment;
   /** 已派角色数量（档期负载提示） */
   assignedCount: number;
+  /** 累计排练合计（小时，场次折算＋额外排练）；由页面侧按 utils/rehearsal 算好传入 */
+  totalHours?: number;
 }
 
 export interface AssigneePickerProps {
@@ -173,7 +175,7 @@ export function AssigneePicker({
           <Space size={6} wrap>
             <Typography.Text strong>{current.operator.name}</Typography.Text>
             <SkillTags operator={current.operator} />
-            <Tag>累计排练 {current.operator.rehearsalHours} 小时</Tag>
+            {typeof current.totalHours === 'number' ? <Tag>累计排练 {current.totalHours} 小时</Tag> : null}
             <Tag>已派角色 {current.assignedCount} 个</Tag>
           </Space>
           <SlotSummary operator={current.operator} />
