@@ -14,7 +14,7 @@ import { nowIso } from './uuid';
 import { seedDatabase } from './seed';
 
 /** 当前数据结构版本号（每次调整字段结构必须 +1 并补迁移） */
-export const DB_SCHEMA_VERSION = 2;
+export const DB_SCHEMA_VERSION = 3;
 
 /** 数据库名 */
 export const DB_NAME = 'gbshadowplay';
@@ -31,7 +31,7 @@ export type RoleRow = ShadowRole & Revisioned;
 export type OperatorRow = Operator & Revisioned;
 export type CueRow = PercussionCue & Revisioned;
 
-export const ROW_REVISION = 2;
+export const ROW_REVISION = 3;
 
 class ShadowPlayDatabase extends Dexie {
   plays!: Table<PlayRow, string>;
@@ -53,7 +53,7 @@ class ShadowPlayDatabase extends Dexie {
     });
 
     // v2：新增 revision 行修订号；场次补充索引，锣鼓点补充 playId 冗余便于按剧目统计
-    this.version(DB_SCHEMA_VERSION)
+    this.version(2)
       .stores({
         plays: 'id, title, genre, status, createdAt, updatedAt',
         scenes: 'id, playId, seq, progress, needsShadowScreen',
@@ -77,6 +77,30 @@ class ShadowPlayDatabase extends Dexie {
             if (typeof row.createdAt !== 'string') row.createdAt = row.updatedAt;
           });
         }
+      });
+
+    // v3：操耍人工时拆两笔——场次工时改为实时计算（不入库），
+    // 原先手工点加减的 rehearsalHours 认领为「额外排练」extraRehearsalHours。
+    this.version(DB_SCHEMA_VERSION)
+      .stores({
+        plays: 'id, title, genre, status, createdAt, updatedAt',
+        scenes: 'id, playId, seq, progress, needsShadowScreen',
+        roles: 'id, sceneId, operatorId, roleType, name',
+        operators: 'id, name',
+        cues: 'id, sceneId, atSecond, instrument, beatName',
+      })
+      .upgrade(async (tx) => {
+        await tx
+          .table('operators')
+          .toCollection()
+          .modify((row: Record<string, unknown>) => {
+            if (typeof row.extraRehearsalHours !== 'number') {
+              const legacy = typeof row.rehearsalHours === 'number' ? row.rehearsalHours : 0;
+              row.extraRehearsalHours = legacy;
+            }
+            delete row.rehearsalHours;
+            row.revision = ROW_REVISION;
+          });
       });
   }
 }
@@ -159,6 +183,11 @@ export async function listRolesByScenes(sceneIds: string[]): Promise<RoleRow[]> 
 
 export async function listAllRoles(): Promise<RoleRow[]> {
   return db.roles.toArray();
+}
+
+/** 全部场次（操耍人工时需跨剧目逐场累加，因此不能只取单个剧目） */
+export async function listAllScenes(): Promise<SceneRow[]> {
+  return db.scenes.toArray();
 }
 
 export async function putRole(row: RoleRow): Promise<void> {
@@ -267,7 +296,16 @@ export async function importSnapshot(snapshot: DatabaseSnapshot): Promise<void> 
     await db.plays.bulkPut(snapshot.plays.map(rev));
     await db.scenes.bulkPut(snapshot.scenes.map(rev));
     await db.roles.bulkPut(snapshot.roles.map(rev));
-    await db.operators.bulkPut(snapshot.operators.map(rev));
+    // 旧版存档只有 rehearsalHours：认领为额外排练；场次工时一律实时重算，不从存档恢复。
+    const normalizeOperator = (row: Operator): OperatorRow => {
+      const legacy = row as Operator & { rehearsalHours?: number };
+      const extraRehearsalHours =
+        typeof legacy.rehearsalHours === 'number' ? Math.max(0, legacy.rehearsalHours) : Math.max(0, row.extraRehearsalHours);
+      // rest 同级省略掉旧字段，避免把 rehearsalHours 再写回新结构
+      const { rehearsalHours: _legacyHours, ...rest } = legacy;
+      return { ...rest, extraRehearsalHours, revision: ROW_REVISION };
+    };
+    await db.operators.bulkPut(snapshot.operators.map(normalizeOperator));
     await db.cues.bulkPut(snapshot.cues.map(rev));
   });
 }

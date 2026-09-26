@@ -8,6 +8,7 @@ import type { ShadowRole } from '../types/role';
 import type { Operator } from '../types/operator';
 import type { PercussionCue } from '../types/cue';
 import { secondsToTimecode } from './timecode';
+import { formatHours, rehearsalBreakdown } from './rehearsal';
 import { BEAT_NAME_LABEL, INSTRUMENT_LABEL } from '../types/cue';
 import { ROLE_TYPE_LABEL, PROP_PART_LABEL } from '../types/role';
 import { PLAY_GENRE_LABEL, PLAY_STATUS_LABEL } from '../types/play';
@@ -141,12 +142,31 @@ export function exportPlayCsvFile(
   return filename;
 }
 
-/** 操耍人档导出为 CSV（含技能、冲突时段、已派角色数） */
-export function exportOperatorCsvFile(operators: Operator[], roles: ShadowRole[]): string {
-  const header = ['姓名', '技能标签', '累计排练时长(小时)', '已派角色数', '已派角色', '冲突时段'];
+/**
+ * 操耍人档导出为 CSV
+ * 工时两笔分列：场次工时（按已派角色所在场次自动折算）／额外排练（手工登记），再加合计。
+ */
+export function exportOperatorCsvFile(
+  operators: Operator[],
+  roles: ShadowRole[],
+  scenes: Scene[] = [],
+): string {
+  const header = [
+    '姓名',
+    '技能标签',
+    '场次工时(小时)',
+    '参与场次(场)',
+    '场次工时(分钟)',
+    '额外排练(小时)',
+    '合计工时(小时)',
+    '已派角色数',
+    '已派角色',
+    '冲突时段',
+  ];
   const lines = [header.map(csvCell).join(',')];
   operators.forEach((operator) => {
     const bound = roles.filter((role) => operator.assignedRoleIds.includes(role.id));
+    const breakdown = rehearsalBreakdown(operator, roles, scenes);
     const slots = operator.busySlots
       .map(
         (slot) =>
@@ -159,7 +179,11 @@ export function exportOperatorCsvFile(operators: Operator[], roles: ShadowRole[]
       [
         operator.name,
         operator.skillTags.map((tag) => SKILL_TAG_LABEL[tag]).join('／') || '未标注',
-        operator.rehearsalHours,
+        formatHours(breakdown.sceneHours),
+        breakdown.sceneCount,
+        breakdown.sceneMinutes,
+        formatHours(breakdown.extraHours),
+        formatHours(breakdown.totalHours),
         bound.length,
         bound.map((role) => role.name).join('／'),
         slots || '无',

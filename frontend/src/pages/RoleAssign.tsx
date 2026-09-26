@@ -57,6 +57,8 @@ import { SHADOW_SCREEN_LABEL } from '../types/scene';
 import {
   ROW_REVISION,
   getScene,
+  listAllRoles,
+  listAllScenes,
   listRolesByScene,
   putRole,
   removeRole,
@@ -64,6 +66,7 @@ import {
   type SceneRow,
 } from '../utils/db';
 import { nowIso, uuid } from '../utils/uuid';
+import { formatHours, rehearsalBreakdown } from '../utils/rehearsal';
 
 export default function RoleAssign() {
   const { id: sceneId = '' } = useParams<{ id: string }>();
@@ -73,6 +76,8 @@ export default function RoleAssign() {
 
   const [scene, setScene] = useState<SceneRow | null>(null);
   const [roles, setRoles] = useState<RoleRow[]>([]);
+  const [allRoles, setAllRoles] = useState<RoleRow[]>([]);
+  const [allScenes, setAllScenes] = useState<SceneRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
 
@@ -87,12 +92,16 @@ export default function RoleAssign() {
 
   const reload = useCallback(async () => {
     setLoading(true);
-    const [sceneRow, roleRows] = await Promise.all([
+    const [sceneRow, roleRows, globalRoles, globalScenes] = await Promise.all([
       getScene(sceneId),
       listRolesByScene(sceneId),
+      listAllRoles(),
+      listAllScenes(),
     ]);
     setScene(sceneRow ?? null);
     setRoles(roleRows);
+    setAllRoles(globalRoles);
+    setAllScenes(globalScenes);
     setLoading(false);
     if (sceneRow) {
       await Promise.all([loadScenes(sceneRow.playId), loadOperators()]);
@@ -115,12 +124,18 @@ export default function RoleAssign() {
   /** 每个角色的候选操耍人（含冲突评估），供 <AssigneePicker> 使用 */
   const optionsFor = useCallback(
     (roleId: string): AssigneeOption[] =>
-      operators.map((operator) => ({
-        operator,
-        assessment: conflict.assess(roleId, operator.id),
-        assignedCount: operator.assignedRoleIds.length,
-      })),
-    [conflict, operators],
+      operators.map((operator) => {
+        const breakdown = rehearsalBreakdown(operator, allRoles, allScenes);
+        return {
+          operator,
+          assessment: conflict.assess(roleId, operator.id),
+          assignedCount: operator.assignedRoleIds.length,
+          rehearsalText: `场次 ${formatHours(breakdown.sceneHours)} + 额外 ${formatHours(
+            breakdown.extraHours,
+          )} = ${formatHours(breakdown.totalHours)} 小时`,
+        };
+      }),
+    [conflict, operators, allRoles, allScenes],
   );
 
   const patchRole = async (roleId: string, patch: Partial<Omit<RoleRow, 'id' | 'sceneId' | 'createdAt'>>) => {
@@ -148,6 +163,7 @@ export default function RoleAssign() {
     };
     await putRole(row);
     setRoles((prev) => [...prev, row]);
+    setAllRoles((prev) => [...prev, row]);
     setModalOpen(false);
     form.resetFields();
     message.success(`已新增影人角色「${row.name}」，请指派操耍人`);
@@ -163,6 +179,7 @@ export default function RoleAssign() {
       onOk: async () => {
         await removeRole(role.id);
         setRoles((prev) => prev.filter((item) => item.id !== role.id));
+        setAllRoles((prev) => prev.filter((item) => item.id !== role.id));
         await loadOperators();
         message.success('角色已删除');
       },
@@ -182,13 +199,15 @@ export default function RoleAssign() {
     }
     const holder = operators.find((operator) => operator.id === operatorId);
     await patchRole(roleId, { operatorId });
-    message.success(`已指派给 ${holder?.name ?? '该操耍人'}`);
+    setAllRoles(await listAllRoles());
+    message.success(`已指派给 ${holder?.name ?? '该操耍人'}，其场次工时已自动重算`);
   };
 
   const handleUnbind = async (roleId: string) => {
     await conflict.unbind(roleId);
     await patchRole(roleId, { operatorId: null });
-    message.success('已解绑操耍人');
+    setAllRoles(await listAllRoles());
+    message.success('已解绑操耍人，其场次工时已自动重算');
   };
 
   const columns: ColumnsType<RoleRow> = [
@@ -283,7 +302,14 @@ export default function RoleAssign() {
             />
             {bound ? (
               <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                现由 {bound.name} 操耍｜累计排练 {bound.rehearsalHours} 小时｜已派 {bound.assignedRoleIds.length} 个角色
+                {(() => {
+                  const boundBreakdown = rehearsalBreakdown(bound, allRoles, allScenes);
+                  return `现由 ${bound.name} 操耍｜场次工时 ${formatHours(
+                    boundBreakdown.sceneHours,
+                  )} 小时 + 额外 ${formatHours(boundBreakdown.extraHours)} 小时，合计 ${formatHours(
+                    boundBreakdown.totalHours,
+                  )} 小时｜已派 ${bound.assignedRoleIds.length} 个角色`;
+                })()}
               </Typography.Text>
             ) : (
               <Typography.Text type="warning" style={{ fontSize: 12 }}>

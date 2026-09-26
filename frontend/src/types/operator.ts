@@ -34,8 +34,11 @@ export interface Operator {
   busySlots: BusySlot[];
   /** 已派角色 id 列表 */
   assignedRoleIds: string[];
-  /** 累计排练时长（小时） */
-  rehearsalHours: number;
+  /**
+   * 额外排练时长（小时，手工登记）。
+   * 场次工时（已派角色所在场次时长折算）实时计算、不落库，两笔分开记账。
+   */
+  extraRehearsalHours: number;
   /** 创建时间（ISO 字符串） */
   createdAt: string;
   /** 最近修改时间（ISO 字符串） */

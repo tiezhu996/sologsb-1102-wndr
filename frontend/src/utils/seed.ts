@@ -37,11 +37,11 @@ interface SeedPlaySpec {
   scenes: SeedSceneSpec[];
 }
 
-const OPERATORS: Array<Pick<OperatorRow, 'name' | 'skillTags' | 'busySlots' | 'rehearsalHours'>> = [
+const OPERATORS: Array<Pick<OperatorRow, 'name' | 'skillTags' | 'busySlots' | 'extraRehearsalHours'>> = [
   {
     name: '霍连生',
     skillTags: ['qianzi', 'lianben'],
-    rehearsalHours: 42,
+    extraRehearsalHours: 42,
     busySlots: [
       { id: 'slot-hls-1', weekday: 1, startMinute: 0, durationMinute: 180, label: '周一上午·连排《借伞》' },
       { id: 'slot-hls-2', weekday: 4, startMinute: 120, durationMinute: 150, label: '周四午后·合乐' },
@@ -50,7 +50,7 @@ const OPERATORS: Array<Pick<OperatorRow, 'name' | 'skillTags' | 'busySlots' | 'r
   {
     name: '苗凤仪',
     skillTags: ['qianzi', 'wuda'],
-    rehearsalHours: 36,
+    extraRehearsalHours: 36,
     busySlots: [
       { id: 'slot-mfy-1', weekday: 1, startMinute: 60, durationMinute: 120, label: '周一上午·武场对打' },
       { id: 'slot-mfy-2', weekday: 5, startMinute: 0, durationMinute: 200, label: '周五整日·走台' },
@@ -59,13 +59,13 @@ const OPERATORS: Array<Pick<OperatorRow, 'name' | 'skillTags' | 'busySlots' | 'r
   {
     name: '裴三保',
     skillTags: ['lianben', 'wuda'],
-    rehearsalHours: 28,
+    extraRehearsalHours: 28,
     busySlots: [{ id: 'slot-psb-1', weekday: 2, startMinute: 240, durationMinute: 120, label: '周二下午·神怪场' }],
   },
   {
     name: '闻小楼',
     skillTags: ['qianzi'],
-    rehearsalHours: 19,
+    extraRehearsalHours: 19,
     busySlots: [{ id: 'slot-wxl-1', weekday: 3, startMinute: 0, durationMinute: 150, label: '周三上午·新编场' }],
   },
 ];

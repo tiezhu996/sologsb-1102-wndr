@@ -14,6 +14,8 @@ export interface AssigneeOption {
   assessment: CandidateAssessment;
   /** 已派角色数量（档期负载提示） */
   assignedCount: number;
+  /** 工时摘要（如「场次 0.88 + 额外 42 = 42.88 小时」），不传则不显示 */
+  rehearsalText?: string;
 }
 
 export interface AssigneePickerProps {
@@ -173,8 +175,8 @@ export function AssigneePicker({
           <Space size={6} wrap>
             <Typography.Text strong>{current.operator.name}</Typography.Text>
             <SkillTags operator={current.operator} />
-            <Tag>累计排练 {current.operator.rehearsalHours} 小时</Tag>
             <Tag>已派角色 {current.assignedCount} 个</Tag>
+            {current.rehearsalText ? <Tag color="gold">{current.rehearsalText}</Tag> : null}
           </Space>
           <SlotSummary operator={current.operator} />
         </Space>
